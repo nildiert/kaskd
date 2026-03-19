@@ -12,8 +12,8 @@ module Kaskd
   #
   #   radius[:target]  # => "My::ServiceClass"
   #   radius[:by_depth] # => {
-  #     1 => [{ class_name: "A", via: "My::ServiceClass", file: "..." }, ...],
-  #     2 => [{ class_name: "B", via: "A",                file: "..." }, ...],
+  #     1 => [{ class_name: "A", via: "My::ServiceClass", file: "...", dependencies: [...], parent: "..." }, ...],
+  #     2 => [{ class_name: "B", via: "A",                file: "...", dependencies: [...], parent: nil  }, ...],
   #   }
   #   radius[:affected] # => flat array of all entries, sorted by depth then name
   #   radius[:max_depth_reached] # => Integer — deepest level found (≤ max_depth)
@@ -53,10 +53,12 @@ module Kaskd
         .sort_by { |name, meta| [meta[:depth], name] }
         .map do |name, meta|
           {
-            class_name: name,
-            depth:      meta[:depth],
-            via:        meta[:via],
-            file:       @services.dig(name, :file),
+            class_name:   name,
+            depth:        meta[:depth],
+            via:          meta[:via],
+            file:         @services.dig(name, :file),
+            dependencies: @services.dig(name, :dependencies) || [],
+            parent:       @services.dig(name, :parent),
           }
         end
 
