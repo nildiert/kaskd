@@ -18,7 +18,7 @@ module Kaskd
   #   radius[:affected] # => flat array of all entries, sorted by depth then name
   #   radius[:max_depth_reached] # => Integer — deepest level found (≤ max_depth)
   class BlastRadius
-    DEFAULT_MAX_DEPTH = 6
+    DEFAULT_MAX_DEPTH = 8
 
     # @param services [Hash] output of Kaskd::Analyzer#analyze — services keyed by class name.
     def initialize(services)
