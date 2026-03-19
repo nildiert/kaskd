@@ -5,6 +5,7 @@ require_relative "kaskd/analyzer"
 require_relative "kaskd/blast_radius"
 require_relative "kaskd/test_finder"
 require_relative "kaskd/configuration"
+require_relative "kaskd/tree_renderer"
 
 module Kaskd
   class << self
@@ -51,6 +52,24 @@ module Kaskd
       radius   = BlastRadius.new(result[:services]).compute(class_name, max_depth: max_depth)
       affected = radius[:affected].map { |a| a[:class_name] } + [class_name]
       TestFinder.new(root: root).find_for(affected, result[:services])
+    end
+
+    # Render the blast radius of a service as an ASCII tree.
+    # Combines blast_radius + TreeRenderer in one call.
+    #
+    # Example output:
+    #   My::ServiceClass
+    #   ├── My::InvoiceService  [depth 1]  app/services/my/invoice_service.rb
+    #   │   └── My::ReportService  [depth 2]  app/services/my/report_service.rb
+    #   └── My::NotifierService  [depth 1]  app/services/my/notifier_service.rb
+    #
+    # @param class_name [String]
+    # @param root       [String, nil]
+    # @param max_depth  [Integer, nil]
+    # @return [String]
+    def render_tree(class_name, root: nil, max_depth: BlastRadius::DEFAULT_MAX_DEPTH)
+      radius = blast_radius(class_name, root: root, max_depth: max_depth)
+      TreeRenderer.render(radius)
     end
   end
 end
