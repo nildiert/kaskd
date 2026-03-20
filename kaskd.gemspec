@@ -19,6 +19,12 @@ Gem::Specification.new do |spec|
   spec.homepage = "https://github.com/nildiert/kaskd"
   spec.license  = "MIT"
 
+  spec.metadata = {
+    "homepage_uri"    => spec.homepage,
+    "source_code_uri" => "https://github.com/nildiert/kaskd",
+    "changelog_uri"   => "https://github.com/nildiert/kaskd/releases",
+  }
+
   spec.required_ruby_version = ">= 2.7"
 
   spec.files = Dir["lib/**/*.rb", "LICENSE", "README.md"]
