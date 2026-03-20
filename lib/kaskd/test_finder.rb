@@ -8,8 +8,12 @@ module Kaskd
   #   2. For each test file, extract the class name it likely tests using two heuristics:
   #      a. Naming convention: strip _test / _spec suffix from the filename and map it
   #         to a Ruby constant (e.g. my_service_test.rb => MyService).
+  #         This is the default (and recommended) strategy — it has zero false positives
+  #         because it relies on Rails path conventions (namespace + underscore name).
   #      b. Content scan: look for references to any of the target class names inside
-  #         the file body.
+  #         the file body. Use with caution — generates false positives when a class
+  #         name appears in comments, factories, or shared setup without being the
+  #         actual subject under test.
   #   3. Return a deduplicated list of { path:, class_name: } for every match.
   #
   # Usage:
@@ -18,7 +22,12 @@ module Kaskd
   #   targets = radius[:affected].map { |a| a[:class_name] } + ["My::ServiceClass"]
   #   tests   = Kaskd::TestFinder.new.find_for(targets, result[:services])
   #   tests[:test_files]  # => [{ path: "test/...", class_name: "My::ServiceClass" }, ...]
+  #
+  #   # Use content scan as well (more results, possible false positives):
+  #   tests = Kaskd::TestFinder.new.find_for(targets, result[:services], strategy: :convention_and_content)
   class TestFinder
+    STRATEGIES = %i[convention_only convention_and_content].freeze
+
     # @param root  [String, nil] project root. Defaults to Dir.pwd.
     # @param globs [Array<String>, nil] override test glob patterns.
     def initialize(root: nil, globs: nil)
@@ -26,11 +35,58 @@ module Kaskd
       @globs = globs || Kaskd.configuration.test_globs
     end
 
+    # Find test files that reference any of the given terms (method names, strings).
+    #
+    # Unlike find_for (which requires class names and uses naming conventions),
+    # find_referencing performs a raw content search across all test files.
+    # This catches tests that exercise modified code through parent routes or
+    # integration paths where the test filename doesn't match the modified source.
+    #
+    # Example: if evaluator_people_controller.rb changes a redirect, this finds
+    # evaluation_processes_controller_active_test.rb that asserts that redirect.
+    #
+    # @param terms      [Array<String>] strings to search for (method names, constants, etc.)
+    # @param with_cases [Boolean] when true, extract individual test cases from each file.
+    # @return [Hash] { terms:, test_files: [{ path:, matched_terms: [...] }] }
+    def find_referencing(terms, with_cases: false)
+      return { terms: terms, test_files: [] } if terms.empty?
+
+      all_tests = resolve_test_files
+      found     = {}
+
+      all_tests.each do |path|
+        rel           = relative_path(path)
+        matched_terms = terms_in_file(path, terms)
+        next if matched_terms.empty?
+
+        found[rel] = { path: rel, matched_terms: matched_terms }
+      end
+
+      test_files = found.values.sort_by { |t| t[:path] }
+
+      if with_cases
+        extractor = TestCaseExtractor.new(root: @root)
+        test_files.each { |entry| entry[:test_cases] = extractor.extract(entry[:path]) }
+      end
+
+      { terms: terms, test_files: test_files }
+    end
+
     # @param target_classes [Array<String>] fully-qualified class names to search for.
     # @param services       [Hash] services map from Kaskd::Analyzer#analyze (used for
     #                              quick filename-to-class lookups).
+    # @param strategy       [Symbol] :convention_only (default) or :convention_and_content.
+    #                                :convention_only  — only match by Rails filename convention (zero false positives).
+    #                                :convention_and_content — also scan file body for class name references
+    #                                                          (more results, possible false positives).
+    # @param with_cases     [Boolean] when true, each result includes :test_cases — an Array of
+    #                                 { description:, line:, context: } extracted from the test file.
     # @return [Hash]
-    def find_for(target_classes, services = {})
+    def find_for(target_classes, services = {}, strategy: :convention_only, with_cases: false)
+      unless STRATEGIES.include?(strategy)
+        raise ArgumentError, "Unknown strategy #{strategy.inspect}. Use one of: #{STRATEGIES.join(', ')}"
+      end
+
       target_set  = target_classes.to_set
       all_tests   = resolve_test_files
       found       = {}
@@ -42,7 +98,7 @@ module Kaskd
       all_tests.each do |path|
         rel     = relative_path(path)
         matched = match_by_convention(rel, target_set, name_map)
-        matched ||= match_by_content(path, target_set)
+        matched ||= match_by_content(path, target_set) if strategy == :convention_and_content
         next unless matched
 
         # A test file may cover multiple targets — accumulate all
@@ -52,9 +108,17 @@ module Kaskd
         end
       end
 
+      test_files = found.values.sort_by { |t| [t[:path], t[:class_name]] }
+
+      if with_cases
+        extractor = TestCaseExtractor.new(root: @root)
+        test_files.each { |entry| entry[:test_cases] = extractor.extract(entry[:path]) }
+      end
+
       {
         target_classes: target_classes,
-        test_files:     found.values.sort_by { |t| [t[:path], t[:class_name]] },
+        strategy:       strategy,
+        test_files:     test_files,
       }
     end
 
@@ -131,6 +195,14 @@ module Kaskd
       matched.empty? ? nil : matched.to_a
     rescue Errno::ENOENT, Errno::EACCES
       nil
+    end
+
+    # Term scan — returns which of the given terms appear in the file.
+    def terms_in_file(path, terms)
+      content = File.read(path, encoding: "utf-8", invalid: :replace, undef: :replace)
+      terms.select { |term| content.include?(term) }
+    rescue Errno::ENOENT, Errno::EACCES
+      []
     end
   end
 end
