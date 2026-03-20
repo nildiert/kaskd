@@ -84,14 +84,41 @@ module Kaskd
     # Heuristic 1 — naming convention.
     # test/services/my/service_test.rb => base "service" or "my_service"
     # Returns matched class names or nil.
+    #
+    # Path-similarity guard: when a candidate class is namespaced (e.g.
+    # Talent::EmployeeEvaluations::Restore), we require that at least one
+    # namespace segment (underscored) appears somewhere in the test file's
+    # directory path. This prevents generic base names like "restore" from
+    # matching unrelated tests in other packs/modules.
     def match_by_convention(rel_path, target_set, name_map)
       base = File.basename(rel_path, ".rb")
                  .delete_suffix("_test")
                  .delete_suffix("_spec")
 
+      dir_segments = File.dirname(rel_path).split("/").map(&:downcase)
+
       candidates = name_map[base] || []
-      matched    = candidates.select { |c| target_set.include?(c) }
+      matched    = candidates.select do |class_name|
+        next false unless target_set.include?(class_name)
+
+        namespace_parts = class_name.split("::").map { |p| underscore(p) }
+        # The leaf (last part) matches by definition (it's the base name).
+        # Require at least one of the *namespace* segments (all except the last)
+        # to appear in the directory path of the test file.
+        ns_parts = namespace_parts[0..-2]
+        ns_parts.empty? || ns_parts.any? { |seg| dir_segments.include?(seg) }
+      end
+
       matched.empty? ? nil : matched
+    end
+
+    # Minimal underscore — converts CamelCase to snake_case.
+    # e.g. "EmployeeEvaluations" => "employee_evaluations"
+    def underscore(str)
+      str
+        .gsub(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
+        .gsub(/([a-z\d])([A-Z])/, '\1_\2')
+        .downcase
     end
 
     # Heuristic 2 — content scan.
