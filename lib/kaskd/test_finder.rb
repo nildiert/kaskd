@@ -81,32 +81,33 @@ module Kaskd
       map
     end
 
-    # Heuristic 1 — naming convention.
-    # test/services/my/service_test.rb => base "service" or "my_service"
-    # Returns matched class names or nil.
+    # Heuristic 1 — naming convention (Rails-style path guard).
     #
-    # Path-similarity guard: when a candidate class is namespaced (e.g.
-    # Talent::EmployeeEvaluations::Restore), we require that at least one
-    # namespace segment (underscored) appears somewhere in the test file's
-    # directory path. This prevents generic base names like "restore" from
-    # matching unrelated tests in other packs/modules.
+    # Rails convention: the test file path mirrors the class namespace.
+    #   Talent::EmployeeEvaluations::Restore
+    #     => expected path fragment: "talent/employee_evaluations/restore"
+    #
+    # A test file matches a candidate class only when the full underscored
+    # namespace path (e.g. "talent/employee_evaluations/restore") is a
+    # substring of the test's relative path (ignoring the _test/_spec suffix).
+    # This is the same guard Rails autoload uses and eliminates false positives
+    # from generic leaf names like "restore" or "create" appearing in unrelated
+    # packs.
     def match_by_convention(rel_path, target_set, name_map)
       base = File.basename(rel_path, ".rb")
                  .delete_suffix("_test")
                  .delete_suffix("_spec")
 
-      dir_segments = File.dirname(rel_path).split("/").map(&:downcase)
+      # Normalise the test path for substring matching (drop extension suffix).
+      normalised_path = File.join(File.dirname(rel_path), base)
 
       candidates = name_map[base] || []
       matched    = candidates.select do |class_name|
         next false unless target_set.include?(class_name)
 
-        namespace_parts = class_name.split("::").map { |p| underscore(p) }
-        # The leaf (last part) matches by definition (it's the base name).
-        # Require at least one of the *namespace* segments (all except the last)
-        # to appear in the directory path of the test file.
-        ns_parts = namespace_parts[0..-2]
-        ns_parts.empty? || ns_parts.any? { |seg| dir_segments.include?(seg) }
+        # Build the expected path fragment from the fully-qualified class name.
+        expected_fragment = class_name.split("::").map { |p| underscore(p) }.join("/")
+        normalised_path.include?(expected_fragment)
       end
 
       matched.empty? ? nil : matched
